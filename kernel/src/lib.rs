@@ -95,7 +95,6 @@ mod log_compaction;
 mod log_path;
 mod log_reader;
 pub mod metrics;
-pub(crate) mod parallel;
 pub mod scan;
 pub mod schema;
 pub mod snapshot;
@@ -155,6 +154,10 @@ pub(crate) mod history_manager;
 // Benchmarking infrastructure (only public for benchmarks and tests)
 #[cfg(any(test, feature = "internal-api"))]
 pub mod benchmarks;
+#[cfg(feature = "internal-api")]
+pub mod parallel;
+#[cfg(not(feature = "internal-api"))]
+pub(crate) mod parallel;
 
 pub use action_reconciliation::{ActionReconciliationIterator, ActionReconciliationIteratorState};
 pub use delta_kernel_derive;
