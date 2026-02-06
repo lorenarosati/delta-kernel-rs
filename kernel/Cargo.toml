@@ -140,6 +140,7 @@ rustc_version = "0.4.1"
 delta_kernel = { path = ".", features = ["arrow", "catalog-managed", "default-engine-rustls", "internal-api"] }
 test_utils = { path = "../test-utils" }
 criterion = "0.5"
+pprof = { version = "0.3", features = ["flamegraph"] }
 # Used for testing parse_url_opts extensibility
 hdfs-native-object-store = { version = "0.15.0" }
 hdfs-native = "0.12.2"
@@ -160,4 +161,8 @@ harness = false
 
 [[bench]]
 name = "expression_bench"
+harness = false
+
+[[bench]]
+name = "workload_bench"
 harness = false
