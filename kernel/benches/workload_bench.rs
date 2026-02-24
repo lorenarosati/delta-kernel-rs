@@ -37,7 +37,7 @@ fn workload_benchmarks(c: &mut Criterion) {
         match &workload.spec {
             Spec::Read(read_spec) => {
                 for operation in [ReadOperation::ReadMetadata] {
-                    let configs = choose_config();
+                    let configs = choose_read_config();
                     for config in configs {
                         let runner = create_read_runner(
                             &workload.table_info,
@@ -59,7 +59,7 @@ fn workload_benchmarks(c: &mut Criterion) {
                     snapshot_construction_spec,
                     engine.clone(),
                 )
-                .expect("Failed to create snapshot runner");
+                .expect("Failed to create snapshot construction runner");
                 run_benchmark(&mut group, &runner);
             }
         }
@@ -74,9 +74,9 @@ fn run_benchmark(group: &mut BenchmarkGroup<WallTime>, runner: &dyn WorkloadRunn
     });
 }
 
-fn choose_config() -> Vec<ReadConfig> {
+fn choose_read_config() -> Vec<ReadConfig> {
     //Choose which benchmark configurations to run for a given table
-    // TODO: This function will take in table info to choose the appropriate configs for a given table
+    //TODO: This function will take in table info to choose the appropriate configs for a given table
     default_read_configs()
 }
 
