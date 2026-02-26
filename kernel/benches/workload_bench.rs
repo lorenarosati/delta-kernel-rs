@@ -82,8 +82,8 @@ fn choose_read_config(case_name: &str) -> Vec<ReadConfig> {
     let mut configs = default_read_configs();
     if case_name.contains("v2_checkpoint") {
         configs.push(ReadConfig {
-            name: "parallel_8".into(),
-            parallel_scan: ParallelScan::Enabled { num_threads: 8 },
+            name: "parallel_2".into(),
+            parallel_scan: ParallelScan::Enabled { num_threads: 2 },
         });
     }
     configs
