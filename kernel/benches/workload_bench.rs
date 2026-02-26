@@ -8,7 +8,9 @@ use delta_kernel::engine::default::DefaultEngine;
 
 mod utils;
 
-use delta_kernel::benchmarks::models::{default_read_configs, ReadConfig, ReadOperation, Spec};
+use delta_kernel::benchmarks::models::{
+    default_read_configs, ParallelScan, ReadConfig, ReadOperation, Spec,
+};
 use delta_kernel::benchmarks::runners::{
     create_read_runner, SnapshotConstructionRunner, WorkloadRunner,
 };
@@ -37,7 +39,7 @@ fn workload_benchmarks(c: &mut Criterion) {
         match &workload.spec {
             Spec::Read(read_spec) => {
                 for operation in [ReadOperation::ReadMetadata] {
-                    let configs = choose_read_config();
+                    let configs = choose_read_config(&workload.case_name);
                     for config in configs {
                         let runner = create_read_runner(
                             &workload.table_info,
@@ -74,10 +76,17 @@ fn run_benchmark(group: &mut BenchmarkGroup<WallTime>, runner: &dyn WorkloadRunn
     });
 }
 
-fn choose_read_config() -> Vec<ReadConfig> {
+fn choose_read_config(case_name: &str) -> Vec<ReadConfig> {
     //Choose which benchmark configurations to run for a given table
     //TODO: This function will take in table info to choose the appropriate configs for a given table
-    default_read_configs()
+    let mut configs = default_read_configs();
+    if case_name.contains("v2_checkpoint") {
+        configs.push(ReadConfig {
+            name: "parallel_8".into(),
+            parallel_scan: ParallelScan::Enabled { num_threads: 8 },
+        });
+    }
+    configs
 }
 
 criterion_group!(benches, workload_benchmarks);
