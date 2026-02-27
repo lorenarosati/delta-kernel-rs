@@ -1,3 +1,6 @@
+#[allow(dead_code)]
+pub mod comparison;
+
 #[macro_export]
 macro_rules! sort_lines {
     ($lines: expr) => {{

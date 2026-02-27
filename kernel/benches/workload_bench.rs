@@ -36,7 +36,7 @@ fn workload_benchmarks(c: &mut Criterion) {
     for workload in &workloads {
         match &workload.spec {
             Spec::Read(read_spec) => {
-                for operation in [ReadOperation::ReadMetadata] {
+                for operation in [ReadOperation::ReadMetadata, ReadOperation::ReadData] {
                     let configs = choose_read_config();
                     for config in configs {
                         let runner = create_read_runner(
