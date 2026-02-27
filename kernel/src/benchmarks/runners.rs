@@ -27,14 +27,14 @@ pub trait WorkloadRunner {
     fn name(&self) -> &str;
 }
 
-/// Shared setup state for read runners (both ReadMetadata and ReadData).
+/// Shared setup state for read runners.
 struct ReadSetup {
     snapshot: Arc<Snapshot>,
     engine: Arc<dyn Engine>,
     name: String,
 }
 
-/// Builds the snapshot and benchmark name that both read runners need.
+/// Builds the snapshot and benchmark name that all read runners need.
 fn build_read_setup(
     table_info: &TableInfo,
     case_name: &str,
@@ -68,157 +68,53 @@ fn build_read_setup(
     })
 }
 
-pub struct ReadMetadataRunner {
+/// Unified runner for both ReadMetadata and ReadData operations.
+///
+/// Both operations share the same setup (snapshot construction) and differ only
+/// in what they do during execute: ReadMetadata iterates scan file metadata,
+/// while ReadData additionally reads the actual parquet data for each file.
+pub struct ReadRunner {
     snapshot: Arc<Snapshot>,
     engine: Arc<dyn Engine>,
     name: String,
     config: ReadConfig,
+    operation: ReadOperation,
 }
 
-impl ReadMetadataRunner {
+impl ReadRunner {
     pub fn setup(
         table_info: &TableInfo,
         case_name: &str,
         read_spec: &ReadSpec,
+        operation: ReadOperation,
         config: ReadConfig,
         engine: Arc<dyn Engine>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let s = build_read_setup(
-            table_info,
-            case_name,
-            read_spec,
-            ReadOperation::ReadMetadata,
-            &config,
-            engine,
-        )?;
+        let s = build_read_setup(table_info, case_name, read_spec, operation, &config, engine)?;
         Ok(Self {
             snapshot: s.snapshot,
             engine: s.engine,
             name: s.name,
             config,
+            operation,
         })
     }
 
     fn execute_serial(&self) -> Result<(), Box<dyn std::error::Error>> {
         let scan = self.snapshot.clone().scan_builder().build()?;
-        let metadata_iter = scan.scan_metadata(self.engine.as_ref())?;
-        for result in metadata_iter {
-            black_box(result?);
-        }
-        Ok(())
-    }
-
-    fn execute_parallel(&self, num_threads: usize) -> Result<(), Box<dyn std::error::Error>> {
-        let scan = self.snapshot.clone().scan_builder().build()?;
-
-        let mut phase1 = scan.parallel_scan_metadata(self.engine.clone())?;
-        for result in phase1.by_ref() {
-            black_box(result?);
-        }
-
-        match phase1.finish()? {
-            AfterSequential::Done(_) => {}
-            AfterSequential::Parallel { processor, files } => {
-                if num_threads == 0 {
-                    return Err("num_threads in ReadConfig must be greater than 0".into());
-                }
-                let files_per_worker = files.len().div_ceil(num_threads);
-
-                let partitions: Vec<_> = files
-                    .chunks(files_per_worker)
-                    .map(|chunk| chunk.to_vec())
-                    .collect();
-
-                let processor = Arc::new(processor);
-
-                let handles: Vec<_> = partitions
-                    .into_iter()
-                    .map(|partition_files| {
-                        let engine = self.engine.clone();
-                        let processor = processor.clone();
-
-                        thread::spawn(move || -> Result<(), crate::Error> {
-                            if partition_files.is_empty() {
-                                return Ok(());
-                            }
-
-                            let parallel =
-                                ParallelPhase::try_new(engine, processor, partition_files)?;
-                            for result in parallel {
-                                black_box(result?);
-                            }
-
-                            Ok(())
-                        })
-                    })
-                    .collect();
-
-                for handle in handles {
-                    handle.join().map_err(|_| -> Box<dyn std::error::Error> {
-                        "Worker thread panicked".into()
-                    })??;
+        match self.operation {
+            ReadOperation::ReadMetadata => {
+                let metadata_iter = scan.scan_metadata(self.engine.as_ref())?;
+                for result in metadata_iter {
+                    black_box(result?);
                 }
             }
-        }
-        Ok(())
-    }
-}
-
-impl WorkloadRunner for ReadMetadataRunner {
-    fn execute(&self) -> Result<(), Box<dyn std::error::Error>> {
-        match &self.config.parallel_scan {
-            ParallelScan::Disabled => {
-                self.execute_serial()?;
+            ReadOperation::ReadData => {
+                let result_iter = scan.execute(self.engine.clone())?;
+                for result in result_iter {
+                    black_box(result?);
+                }
             }
-            ParallelScan::Enabled { num_threads } => {
-                self.execute_parallel(*num_threads)?;
-            }
-        }
-
-        Ok(())
-    }
-
-    fn name(&self) -> &str {
-        &self.name
-    }
-}
-
-pub struct ReadDataRunner {
-    snapshot: Arc<Snapshot>,
-    engine: Arc<dyn Engine>,
-    name: String,
-    config: ReadConfig,
-}
-
-impl ReadDataRunner {
-    pub fn setup(
-        table_info: &TableInfo,
-        case_name: &str,
-        read_spec: &ReadSpec,
-        config: ReadConfig,
-        engine: Arc<dyn Engine>,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
-        let s = build_read_setup(
-            table_info,
-            case_name,
-            read_spec,
-            ReadOperation::ReadData,
-            &config,
-            engine,
-        )?;
-        Ok(Self {
-            snapshot: s.snapshot,
-            engine: s.engine,
-            name: s.name,
-            config,
-        })
-    }
-
-    fn execute_serial(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let scan = self.snapshot.clone().scan_builder().build()?;
-        let result_iter = scan.execute(self.engine.clone())?;
-        for result in result_iter {
-            black_box(result?);
         }
         Ok(())
     }
@@ -228,17 +124,25 @@ impl ReadDataRunner {
         let table_root = scan.table_root().clone();
         let physical_schema = scan.physical_schema().clone();
         let logical_schema = scan.logical_schema().clone();
+        let operation = self.operation;
 
         let mut phase1 = scan.parallel_scan_metadata(self.engine.clone())?;
         for result in phase1.by_ref() {
             let scan_metadata = result?;
-            read_scan_metadata_data(
-                self.engine.as_ref(),
-                scan_metadata,
-                &table_root,
-                &physical_schema,
-                &logical_schema,
-            )?;
+            match operation {
+                ReadOperation::ReadMetadata => {
+                    black_box(scan_metadata);
+                }
+                ReadOperation::ReadData => {
+                    read_scan_metadata_data(
+                        self.engine.as_ref(),
+                        scan_metadata,
+                        &table_root,
+                        &physical_schema,
+                        &logical_schema,
+                    )?;
+                }
+            }
         }
 
         match phase1.finish()? {
@@ -274,13 +178,20 @@ impl ReadDataRunner {
                                 ParallelPhase::try_new(engine.clone(), processor, partition_files)?;
                             for result in parallel {
                                 let scan_metadata = result?;
-                                read_scan_metadata_data(
-                                    engine.as_ref(),
-                                    scan_metadata,
-                                    &table_root,
-                                    &physical_schema,
-                                    &logical_schema,
-                                )?;
+                                match operation {
+                                    ReadOperation::ReadMetadata => {
+                                        black_box(scan_metadata);
+                                    }
+                                    ReadOperation::ReadData => {
+                                        read_scan_metadata_data(
+                                            engine.as_ref(),
+                                            scan_metadata,
+                                            &table_root,
+                                            &physical_schema,
+                                            &logical_schema,
+                                        )?;
+                                    }
+                                }
                             }
 
                             Ok(())
@@ -299,18 +210,12 @@ impl ReadDataRunner {
     }
 }
 
-impl WorkloadRunner for ReadDataRunner {
+impl WorkloadRunner for ReadRunner {
     fn execute(&self) -> Result<(), Box<dyn std::error::Error>> {
         match &self.config.parallel_scan {
-            ParallelScan::Disabled => {
-                self.execute_serial()?;
-            }
-            ParallelScan::Enabled { num_threads } => {
-                self.execute_parallel(*num_threads)?;
-            }
+            ParallelScan::Disabled => self.execute_serial(),
+            ParallelScan::Enabled { num_threads } => self.execute_parallel(*num_threads),
         }
-
-        Ok(())
     }
 
     fn name(&self) -> &str {
@@ -379,14 +284,9 @@ pub fn create_read_runner(
     config: ReadConfig,
     engine: Arc<dyn Engine>,
 ) -> Result<Box<dyn WorkloadRunner>, Box<dyn std::error::Error>> {
-    match operation {
-        ReadOperation::ReadMetadata => Ok(Box::new(ReadMetadataRunner::setup(
-            table_info, case_name, read_spec, config, engine,
-        )?)),
-        ReadOperation::ReadData => Ok(Box::new(ReadDataRunner::setup(
-            table_info, case_name, read_spec, config, engine,
-        )?)),
-    }
+    Ok(Box::new(ReadRunner::setup(
+        table_info, case_name, read_spec, operation, config, engine,
+    )?))
 }
 
 pub struct SnapshotConstructionRunner {
@@ -481,10 +381,11 @@ mod tests {
 
     #[test]
     fn test_read_metadata_runner_serial() {
-        let runner = ReadMetadataRunner::setup(
+        let runner = ReadRunner::setup(
             &test_table_info(),
             "test_case",
             &test_read_spec(),
+            ReadOperation::ReadMetadata,
             serial_config(),
             test_engine(),
         )
@@ -498,10 +399,11 @@ mod tests {
 
     #[test]
     fn test_read_metadata_runner_parallel() {
-        let runner = ReadMetadataRunner::setup(
+        let runner = ReadRunner::setup(
             &test_table_info(),
             "test_case",
             &test_read_spec(),
+            ReadOperation::ReadMetadata,
             parallel_config(),
             test_engine(),
         )
@@ -585,10 +487,11 @@ mod tests {
 
     #[test]
     fn test_read_data_runner_serial() {
-        let runner = ReadDataRunner::setup(
+        let runner = ReadRunner::setup(
             &test_table_info(),
             "test_case",
             &test_read_spec(),
+            ReadOperation::ReadData,
             serial_config(),
             test_engine(),
         )
@@ -599,10 +502,11 @@ mod tests {
 
     #[test]
     fn test_read_data_runner_parallel() {
-        let runner = ReadDataRunner::setup(
+        let runner = ReadRunner::setup(
             &test_table_info(),
             "test_case",
             &test_read_spec(),
+            ReadOperation::ReadData,
             parallel_config(),
             test_engine(),
         )
