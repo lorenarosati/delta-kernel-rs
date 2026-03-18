@@ -1,5 +1,5 @@
 //! [`LogSegmentFiles`] is a struct holding the result of listing the delta log. Currently, it
-//! exposes three APIs for listing:
+//! exposes four APIs for listing:
 //! 1. [`list_commits`]: Lists all commit files between the provided start and end versions.
 //! 2. [`list`]: Lists all commit and checkpoint files between the provided start and end versions.
 //! 3. [`list_with_checkpoint_hint`]: Lists all commit and checkpoint files after the provided
@@ -245,7 +245,6 @@ impl ListingAccumulator {
 }
 
 /// Controls how the log_tail lower bound is determined during listing accumulation
-#[allow(dead_code)] // DeriveFromCheckpoint used by list_with_backward_checkpoint_scan, not yet wired into the snapshot path
 enum LogTailLowerBound {
     /// Include log_tail entries at version >= v
     Explicit(Version),
@@ -454,7 +453,6 @@ impl LogSegmentFiles {
 
     /// List all commit and checkpoint files after the provided checkpoint. It is guaranteed that all
     /// the returned [`ParsedLogPath`]s will have a version less than or equal to the `end_version`.
-    /// See [`list_log_files_with_version`] for details on the return type.
     pub(crate) fn list_with_checkpoint_hint(
         checkpoint_metadata: &LastCheckpointHint,
         storage: &dyn StorageHandler,
@@ -499,12 +497,6 @@ impl LogSegmentFiles {
     /// This avoids a full forward listing when we have an upper-bound version but no checkpoint
     /// hint: instead of listing from version 0, we walk backward from `end_version` in bounded
     /// windows, stopping as soon as we find a complete checkpoint (or reach version 0).
-    ///
-    /// # Parameters
-    /// - `storage`: storage handler for listing files
-    /// - `log_root`: URL of the `_delta_log/` directory
-    /// - `log_tail`: catalog-provided commit files (must be contiguous and ascending)
-    /// - `end_version`: the upper-bound version (inclusive) to scan from
     pub(crate) fn list_with_backward_checkpoint_scan(
         storage: &dyn StorageHandler,
         log_root: &Url,
